@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+requests
+pymysql
+pandas
+openpyxl
+python-multipart
+anthropic
