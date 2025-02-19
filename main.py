@@ -1,22 +1,28 @@
-
 from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 import requests
 import pymysql
-import pandas as pd
-from io import BytesIO
-from starlette.responses import Response
-from anthropic import anthropic
+import csv
+from io import StringIO
+from anthropic import Anthropic
 
 app = FastAPI()
 
-# XAI API Key (Move to env variables in production)
+# Move to environment variables in production
 XAI_API_KEY = "xai-wLjpXGlEqqAjWOqbmXLnNkAGE8REsN3b4B2S2Zhg7QnLiHuiJ4TPYPEAm1sgFYGq9pS93ncHNGNerbmA"
 
 client = Anthropic(
     api_key=XAI_API_KEY,
     base_url="https://api.x.ai",
 )
+
+DB_CONFIG = {
+    "host": "localhost",
+    "user": "root",
+    "password": "colab123",
+    "database": "employees",
+    "cursorclass": pymysql.cursors.DictCursor
+}
 
 def generate_sql(user_query: str):
     schema = """
@@ -44,36 +50,46 @@ def get_sql(query: str = Form(...)):
 
 @app.post("/execute_sql")
 def execute_sql(sql: str = Form(...)):
-    DB_CONFIG = {
-        "host": "localhost",
-        "user": "root",
-        "password": "colab123",
-        "database": "employees"
-    }
     try:
-        conn = pymysql.connect(host="localhost", user="root", password="colab123", database="employees", cursorclass=pymysql.cursors.DictCursor)
-        cursor = conn.cursor(dictionary=True)
+        conn = pymysql.connect(**DB_CONFIG)
+        cursor = conn.cursor()
         cursor.execute(sql)
         results = cursor.fetchall()
-        cursor.close()
-        conn.close()
         return {"results": results}
     except Exception as e:
         return {"error": str(e)}
+    finally:
+        cursor.close()
+        conn.close()
 
 @app.post("/export")
-def export_to_excel(sql: str = Form(...)):
-    results, _, _ = execute_sql(sql)
-    df = pd.DataFrame(results.get("results", []))
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False)
-    output.seek(0)
-    return Response(
-        output.read(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment;filename=results.xlsx"}
-    )
+def export_to_csv(sql: str = Form(...)):
+    try:
+        conn = pymysql.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute(sql)
+        results = cursor.fetchall()
+        
+        output = StringIO()
+        if results:
+            # Get headers from the first row
+            headers = results[0].keys()
+            writer = csv.DictWriter(output, fieldnames=headers)
+            
+            # Write headers and data
+            writer.writeheader()
+            writer.writerows(results)
+            
+        return Response(
+            output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment;filename=results.csv"}
+        )
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        cursor.close()
+        conn.close()
 
 @app.get("/", response_class=HTMLResponse)
 def home():
