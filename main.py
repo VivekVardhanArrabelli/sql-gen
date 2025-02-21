@@ -1,6 +1,6 @@
+import os
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, Response
-import requests
 import pymysql
 import csv
 from io import StringIO
@@ -8,21 +8,21 @@ from anthropic import Anthropic
 
 app = FastAPI()
 
-# Move to environment variables in production
+DB_CONFIG = {
+    "host": os.getenv("MYSQLHOST"),
+    "port": int(os.getenv("MYSQLPORT", "3306")),
+    "user": os.getenv("MYSQLUSER"),
+    "password": os.getenv("MYSQLPASSWORD"),
+    "database": "employees",  # Use "employees" since test_db creates this
+    "cursorclass": pymysql.cursors.DictCursor
+}
+
 XAI_API_KEY = "xai-wLjpXGlEqqAjWOqbmXLnNkAGE8REsN3b4B2S2Zhg7QnLiHuiJ4TPYPEAm1sgFYGq9pS93ncHNGNerbmA"
 
 client = Anthropic(
     api_key=XAI_API_KEY,
     base_url="https://api.x.ai",
 )
-
-DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "colab123",
-    "database": "employees",
-    "cursorclass": pymysql.cursors.DictCursor
-}
 
 def generate_sql(user_query: str):
     schema = """
@@ -32,7 +32,6 @@ def generate_sql(user_query: str):
     - dept_emp(emp_no, dept_no, from_date, to_date)
     - salaries(emp_no, salary, from_date, to_date)
     """
-
     completion = client.messages.create(
         model="grok-2-latest",
         messages=[
@@ -40,7 +39,6 @@ def generate_sql(user_query: str):
             {"role": "user", "content": user_query}
         ]
     )
-
     return completion.content
 
 @app.post("/generate_sql")
@@ -69,17 +67,12 @@ def export_to_csv(sql: str = Form(...)):
         cursor = conn.cursor()
         cursor.execute(sql)
         results = cursor.fetchall()
-        
         output = StringIO()
         if results:
-            # Get headers from the first row
             headers = results[0].keys()
             writer = csv.DictWriter(output, fieldnames=headers)
-            
-            # Write headers and data
             writer.writeheader()
             writer.writerows(results)
-            
         return Response(
             output.getvalue(),
             media_type="text/csv",
@@ -98,5 +91,9 @@ def home():
     <form action="/generate_sql" method="post">
         <input type="text" name="query" placeholder="Enter your query in English">
         <button type="submit">Generate SQL</button>
+    </form>
+    <form action="/execute_sql" method="post">
+        <input type="text" name="sql" placeholder="Enter SQL to execute">
+        <button type="submit">Execute SQL</button>
     </form>
     """
