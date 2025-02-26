@@ -92,7 +92,7 @@ def execute_sql(sql: str = Form(...)):
             conn.close()
 
 @app.post("/generate_and_execute")
-async def generate_and_execute(request: Request, query: str = Form(...)):  # Fixed parameter order
+async def generate_and_execute(request: Request, query: str = Form(...)):
     try:
         # Generate SQL
         sql_query = generate_sql(query)
@@ -140,14 +140,6 @@ def home():
     <form action="/generate_and_execute" method="post" onsubmit="handleSubmit(event)">
         <input type="text" name="query" placeholder="Enter your query in English" id="queryInput">
         <button type="submit">Generate, Execute, and Download</button>
-    </form>
-    <form action="/generate_sql" method="post">
-        <input type="text" name="query" placeholder="Enter your query in English">
-        <button type="submit">Generate SQL</button>
-    </form>
-    <form action="/execute_sql" method="post">
-        <input type="text" name="sql" placeholder="Enter SQL to execute">
-        <button type="submit">Execute SQL</button>
     </form>
     <div id="result"></div>
     <script>
