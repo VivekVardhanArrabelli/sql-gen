@@ -1,10 +1,15 @@
 import os
+import logging
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, Response
 import pymysql
 import csv
 from io import StringIO
 from anthropic import Anthropic
+
+# Configure logging to show DEBUG messages
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -13,7 +18,7 @@ DB_CONFIG = {
     "port": int(os.getenv("MYSQLPORT", "3306")),
     "user": os.getenv("MYSQLUSER"),
     "password": os.getenv("MYSQLPASSWORD"),
-    "database": "employees",  # Use "employees" since test_db creates this
+    "database": "employees",  # Pointing to Railway's employees DB
     "cursorclass": pymysql.cursors.DictCursor
 }
 
@@ -32,19 +37,38 @@ def generate_sql(user_query: str):
     - dept_emp(emp_no, dept_no, from_date, to_date)
     - salaries(emp_no, salary, from_date, to_date)
     """
-    completion = client.messages.create(
-        model="grok-2-latest",
-        messages=[
-            {"role": "system", "content": f"Generate MySQL for:{schema}"},
-            {"role": "user", "content": user_query}
-        ]
-    )
-    return completion.content
+    try:
+        # Simplified messages using only 'user' role
+        full_prompt = f"Generate MySQL for:{schema} {user_query}"
+        messages = [{"role": "user", "content": full_prompt}]
+        
+        # Log the messages being sent
+        logger.debug(f"Sending messages: {messages}")
+        
+        completion = client.messages.create(
+            model="grok-2-latest",
+            max_tokens=1024,
+            temperature=0.7,
+            messages=messages
+        )
+        # Handle completion.content as a list of message objects
+        if isinstance(completion.content, list):
+            # Extract text from the first message object (assuming it has 'text')
+            for item in completion.content:
+                if hasattr(item, 'text') and item.text:
+                    return item.text.strip()
+            return "No SQL generated"  # Fallback if no text found
+        return str(completion.content).strip()  # Fallback for unexpected types
+    except Exception as e:
+        logger.error(f"Error generating SQL: {str(e)}")
+        return f"Error generating SQL: {str(e)}"
 
 @app.post("/generate_sql")
 def get_sql(query: str = Form(...)):
     sql_query = generate_sql(query)
-    return {"sql": sql_query}
+    if isinstance(sql_query, str) and sql_query.startswith("Error generating SQL:"):
+        return {"sql": None, "error": sql_query}
+    return {"sql": sql_query, "error": None}
 
 @app.post("/execute_sql")
 def execute_sql(sql: str = Form(...)):
@@ -67,12 +91,17 @@ def export_to_csv(sql: str = Form(...)):
         cursor = conn.cursor()
         cursor.execute(sql)
         results = cursor.fetchall()
+        
         output = StringIO()
         if results:
+            # Get headers from the first row
             headers = results[0].keys()
             writer = csv.DictWriter(output, fieldnames=headers)
+            
+            # Write headers and data
             writer.writeheader()
             writer.writerows(results)
+            
         return Response(
             output.getvalue(),
             media_type="text/csv",
