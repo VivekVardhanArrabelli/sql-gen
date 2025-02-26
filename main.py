@@ -39,7 +39,7 @@ def generate_sql(user_query: str):
     """
     try:
         # Simplified messages using only 'user' role
-        full_prompt = f"Generate MySQL for:{schema} {user_query}"
+        full_prompt = f"Generate MySQL for:{schema} {user_query}. Return only the SQL query within ```sql and ``` markers, without additional explanation."
         messages = [{"role": "user", "content": full_prompt}]
         
         # Log the messages being sent
@@ -53,10 +53,15 @@ def generate_sql(user_query: str):
         )
         # Handle completion.content as a list of message objects
         if isinstance(completion.content, list):
-            # Extract text from the first message object (assuming it has 'text')
             for item in completion.content:
                 if hasattr(item, 'text') and item.text:
-                    return item.text.strip()
+                    # Extract SQL between ```sql and ```
+                    text = item.text.strip()
+                    sql_start = text.find("```sql\n") + 7  # Skip ```sql\n
+                    sql_end = text.find("\n```", sql_start)
+                    if sql_start != -1 and sql_end != -1:
+                        return text[sql_start:sql_end].strip()
+                    return text.strip()  # Fallback if no code block
             return "No SQL generated"  # Fallback if no text found
         return str(completion.content).strip()  # Fallback for unexpected types
     except Exception as e:
