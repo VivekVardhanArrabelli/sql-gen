@@ -4,3 +4,4 @@ requests
 pymysql
 python-multipart
 anthropic
+jinja2

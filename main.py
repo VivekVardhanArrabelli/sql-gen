@@ -1,11 +1,14 @@
 import os
 import logging
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 import pymysql
 import csv
 from io import StringIO
 from anthropic import Anthropic
+import json
 
 # Configure logging to show DEBUG messages
 logging.basicConfig(level=logging.DEBUG)
@@ -13,66 +16,107 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+# Mount the static directory to serve CSS and JS files
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Set up Jinja2 templating
+templates = Jinja2Templates(directory="templates")
+
+# Use environment variables for DB configuration
 DB_CONFIG = {
-    "host": os.getenv("MYSQLHOST"),
-    "port": int(os.getenv("MYSQLPORT", "3306")),
-    "user": os.getenv("MYSQLUSER"),
-    "password": os.getenv("MYSQLPASSWORD"),
-    "database": "employees",  # Pointing to Railway's employees DB
+    "host": os.getenv("DB_HOST", "localhost"),
+    "port": int(os.getenv("DB_PORT", 3306)),
+    "user": os.getenv("DB_USER", "root"),
+    "password": os.getenv("DB_PASSWORD", ""),  # Default to empty password for local testing
+    "database": os.getenv("DB_NAME", "Mysql_Gen_V2"),
     "cursorclass": pymysql.cursors.DictCursor
 }
 
-XAI_API_KEY = "xai-wLjpXGlEqqAjWOqbmXLnNkAGE8REsN3b4B2S2Zhg7QnLiHuiJ4TPYPEAm1sgFYGq9pS93ncHNGNerbmA"
+# Use environment variable for API key
+XAI_API_KEY = os.getenv("XAI_API_KEY", "xai-wLjpXGlEqqAjWOqbmXLnNkAGE8REsN3b4B2S2Zhg7QnLiHuiJ4TPYPEAm1sgFYGq9pS93ncHNGNerbmA")
 
 client = Anthropic(
     api_key=XAI_API_KEY,
     base_url="https://api.x.ai",
 )
 
-def generate_sql(user_query: str):
-    schema = """
-    # Employees DB Schema:
-    - employees(emp_no, birth_date, first_name, last_name, gender, hire_date)
-    - departments(dept_no, dept_name)
-    - dept_emp(emp_no, dept_no, from_date, to_date)
-    - salaries(emp_no, salary, from_date, to_date)
-    """
+# Minimal metadata for two tables
+TABLE_METADATA = {
+    "pr_site": {
+        "columns": {
+            "SiteId": "Primary key",
+            "SiteName": "Name of the site",
+            "StateSiteCode": "State code",
+            "StartDate": "Site creation date",
+            "CEPStartDate": "CEP program start date",
+            "RegionId": "Foreign key to pr_region"
+        },
+        "default_filter": "StateSiteCode = 'MA'"
+    },
+    "pr_region": {
+        "columns": {
+            "RegionId": "Primary key",
+            "RegionName": "Name of the region",
+            "StateCd": "State code"
+        },
+        "default_filter": "StateCd = 'MA'"
+    }
+}
+
+# Function to call xAI API and parse query
+def parse_query_with_xai(user_query: str) -> dict:
+    schema_info = "\n".join(
+        [f"- {table}({', '.join([f'{col} ({purpose})' for col, purpose in schema['columns'].items()])})"
+         for table, schema in TABLE_METADATA.items()]
+    )
     try:
-        full_prompt = f"Generate MySQL for:{schema} {user_query}. Return only the SQL query within ```sql and ``` markers, without additional explanation."
-        messages = [{"role": "user", "content": full_prompt}]
-        
-        logger.debug(f"Sending messages: {messages}")
-        
         completion = client.messages.create(
             model="grok-2-latest",
-            max_tokens=1024,
-            temperature=0.7,
-            messages=messages
+            max_tokens=500,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"Generate a MySQL query based on the following schema and query.\n"
+                        f"Schema:\n{schema_info}\n\n"
+                        f"Instructions:\n"
+                        f"- Use the column purpose to determine the correct column (e.g., 'site creation date' for creation).\n"
+                        f"- Default to the table's default_filter unless specified.\n"
+                        f"- For count queries, return a count.\n"
+                        f"- For list queries, return specific columns.\n"
+                        f"- For date-based queries, extract the time range from the query (e.g., 'last 6 months', 'since 2021').\n"
+                        f"- Return the result as JSON with keys: 'sql' (the SQL query), 'action' (count, list, or date_filter), 'date_field' (e.g., StartDate, CEPStartDate, or none), and 'csv' (true if date_filter, false otherwise).\n"
+                        f"Examples:\n"
+                        f"- 'How many sites in Massachusetts?' → {{ 'sql': 'SELECT COUNT(*) as count FROM pr_site WHERE StateSiteCode = \'MA\'', 'action': 'count', 'date_field': 'none', 'csv': false }}\n"
+                        f"- 'List regions' → {{ 'sql': 'SELECT RegionName, RegionId FROM pr_region WHERE StateCd = \'MA\'', 'action': 'list', 'date_field': 'none', 'csv': false }}\n"
+                        f"- 'Sites created in the last 6 months' → {{ 'sql': 'SELECT COUNT(*) as count FROM pr_site WHERE StateSiteCode = \'MA\' AND StartDate >= \'2024-09-10\'', 'action': 'date_filter', 'date_field': 'StartDate', 'csv': true }}\n"
+                    )
+                },
+                {"role": "user", "content": user_query}
+            ]
         )
-        if isinstance(completion.content, list):
-            for item in completion.content:
-                if hasattr(item, 'text') and item.text:
-                    text = item.text.strip()
-                    sql_start = text.find("```sql\n") + 7  # Skip ```sql\n
-                    sql_end = text.find("\n```", sql_start)
-                    if sql_start != -1 and sql_end != -1:
-                        return text[sql_start:sql_end].strip()
-                    return text.strip()
-            return "No SQL generated"
-        return str(completion.content).strip()
+        return json.loads(completion.content[0].text)
     except Exception as e:
         logger.error(f"Error generating SQL: {str(e)}")
-        return f"Error generating SQL: {str(e)}"
+        return {"error": f"Failed to parse query with xAI API: {e}"}
+
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/generate_sql")
-def get_sql(query: str = Form(...)):
-    sql_query = generate_sql(query)
-    if isinstance(sql_query, str) and sql_query.startswith("Error generating SQL:"):
-        return {"sql": None, "error": sql_query}
-    return {"sql": sql_query, "error": None}
+async def get_sql(query: str = Form(...)):
+    try:
+        parsed_result = parse_query_with_xai(query)
+        if "error" in parsed_result:
+            return {"sql": None, "error": parsed_result["error"]}
+        return {"sql": parsed_result["sql"], "action": parsed_result["action"], "date_field": parsed_result["date_field"], "csv": parsed_result["csv"]}
+    except Exception as e:
+        logger.error(f"Error in generate_sql endpoint: {str(e)}")
+        return {"sql": None, "error": str(e)}
 
 @app.post("/execute_sql")
-def execute_sql(sql: str = Form(...)):
+async def execute_sql(sql: str = Form(...), action: str = Form(...), date_field: str = Form("none"), csv: str = Form("false")):
     conn = None
     cursor = None
     try:
@@ -80,8 +124,39 @@ def execute_sql(sql: str = Form(...)):
         conn = pymysql.connect(**DB_CONFIG)
         cursor = conn.cursor()
         cursor.execute(sql)
-        results = cursor.fetchall()
-        return {"results": results}
+        
+        if action in ["count", "date_filter"]:
+            result = cursor.fetchone()
+            count = result["count"] if result else 0
+            if action == "date_filter":
+                date_label = "CEP program" if date_field == "CEPStartDate" else "created"
+                message = f"Number of {sql.split('FROM')[1].split()[0].replace('pr_', '')} {date_label}: {count}"
+            else:
+                message = f"Number of {sql.split('FROM')[1].split()[0].replace('pr_', '')}: {count}"
+            return {"message": message, "query": sql}
+        elif action == "list":
+            results = cursor.fetchall()
+            items = "\n".join([f"- {', '.join(str(v) for v in row.values())}" for row in results])
+            message = f"List of {sql.split('FROM')[1].split()[0].replace('pr_', '')}:\n{items}"
+            return {"message": message, "query": sql}
+        
+        if csv.lower() == "true" and action == "date_filter" and date_field != "none":
+            table_name = sql.split('FROM')[1].split()[0]
+            csv_query = f"SELECT SiteName, SiteId, {date_field} FROM {table_name} WHERE {sql.split('WHERE')[1] if 'WHERE' in sql else TABLE_METADATA[table_name]['default_filter']}"
+            cursor.execute(csv_query)
+            csv_data = cursor.fetchall()
+            output = StringIO()
+            writer = csv.writer(output)
+            headers = ["SiteName", "SiteId", date_field]
+            writer.writerow(headers)
+            writer.writerows([[row[col] for col in headers] for row in csv_data])
+            return FileResponse(
+                path=None,
+                media_type="text/csv",
+                headers={"Content-Disposition": f"attachment; filename={table_name}_filtered.csv"},
+                content=output.getvalue()
+            )
+
     except Exception as e:
         logger.error(f"SQL execution error: {str(e)}")
         return {"error": str(e)}
@@ -91,93 +166,6 @@ def execute_sql(sql: str = Form(...)):
         if conn:
             conn.close()
 
-@app.post("/generate_and_execute")
-async def generate_and_execute(request: Request, query: str = Form(...)):
-    try:
-        # Generate SQL
-        sql_query = generate_sql(query)
-        if sql_query.startswith("Error generating SQL:"):
-            return {"sql": None, "error": sql_query, "results": None, "csv": None}
-
-        # Execute SQL
-        conn = pymysql.connect(**DB_CONFIG)
-        cursor = conn.cursor()
-        cursor.execute(sql_query)
-        results = cursor.fetchall()
-
-        # Generate CSV
-        output = StringIO()
-        if results:
-            headers = results[0].keys()
-            writer = csv.DictWriter(output, fieldnames=headers)
-            writer.writeheader()
-            writer.writerows(results)
-
-        # Prepare CSV response
-        csv_content = output.getvalue()
-        output.close()
-
-        # Trigger CSV download (using JavaScript in HTML)
-        return {
-            "sql": sql_query,
-            "error": None,
-            "results": results,
-            "csv_content": csv_content  # Will be used by JavaScript to initiate download
-        }
-    except Exception as e:
-        logger.error(f"Error in generate_and_execute: {str(e)}")
-        return {"sql": None, "error": str(e), "results": None, "csv": None}
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
-@app.get("/", response_class=HTMLResponse)
-def home():
-    return """
-    <h1>FastAPI SQL Generator & Executor</h1>
-    <form action="/generate_and_execute" method="post" onsubmit="handleSubmit(event)">
-        <input type="text" name="query" placeholder="Enter your query in English" id="queryInput">
-        <button type="submit">Generate, Execute, and Download</button>
-    </form>
-    <div id="result"></div>
-    <script>
-        function handleSubmit(event) {
-            event.preventDefault();
-            const query = document.getElementById('queryInput').value;
-            fetch('/generate_and_execute', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'query=' + encodeURIComponent(query)
-            })
-            .then(response => response.json())
-            .then(data => {
-                const resultDiv = document.getElementById('result');
-                if (data.error) {
-                    resultDiv.innerHTML = `<p>Error: ${data.error}</p>`;
-                } else if (data.sql) {
-                    resultDiv.innerHTML = `<p>SQL Generated: <code>${data.sql}</code></p>`;
-                    if (data.results) {
-                        resultDiv.innerHTML += `<p>Results: ${JSON.stringify(data.results)}</p>`;
-                    }
-                    // Trigger CSV download
-                    if (data.csv_content) {
-                        const blob = new Blob([data.csv_content], { type: 'text/csv' });
-                        const url = window.URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = 'results.csv';
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        window.URL.revokeObjectURL(url);
-                    }
-                }
-            })
-            .catch(error => {
-                document.getElementById('result').innerHTML = `<p>Error: ${error}</p>`;
-            });
-        }
-    </script>
-    """
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)

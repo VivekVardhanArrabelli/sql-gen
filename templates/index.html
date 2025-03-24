@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chat Interface</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="chat-box">
+        <div id="messages"></div>
+        <form id="chat-form" action="/execute_sql" method="post">
+            <input type="text" id="user-input" name="sql" placeholder="Type your message..." required>
+            <button type="submit">Send</button>
+        </form>
+    </div>
+    <script src="/static/script.js"></script>
+</body>
+</html>
