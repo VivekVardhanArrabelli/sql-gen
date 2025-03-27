@@ -61,26 +61,42 @@ TABLE_METADATA = {
 
 # Function to call xAI API using direct HTTP requests
 def parse_query_with_xai(user_query: str) -> dict:
-    schema_info = "\n".join(
-        [f"- {table}({', '.join([f'{col} ({purpose})' for col, purpose in schema['columns'].items()])})"
-         for table, schema in TABLE_METADATA.items()]
-    )
+    schema_info = """
+    Tables:
+    - pr_site: Contains information about sites
+        - SiteId (Primary key)
+        - SiteName (Name of the site)
+        - RegionId (Foreign key to pr_region.RegionId, connects sites to their regions)
+        - StateSiteCode (Optional state code, often null - do NOT use for state queries)
+        - StartDate (Site creation date)
+        - CEPStartDate (CEP program start date)
+    
+    - pr_region: Contains information about regions (states, districts, etc.)
+        - RegionId (Primary key)
+        - RegionName (Name of the region)
+        - StateCd (State code - USE THIS for state filtering)
+
+    Important Relationships:
+    - To find sites by state, you MUST join pr_site and pr_region tables using RegionId and filter by pr_region.StateCd
+    - Do NOT use pr_site.StateSiteCode for state filtering as it's often null
+    """
     
     system_prompt = f"""Generate a MySQL query based on the following schema and query.
 Schema:
 {schema_info}
 
 Instructions:
-- Use the column purpose to determine the correct column (e.g., 'site creation date' for creation).
-- Default to the table's default_filter unless specified.
+- For state-related queries (e.g., "sites in Texas"), always join pr_site with pr_region and filter using pr_region.StateCd
 - For count queries, return a count.
 - For list queries, return specific columns.
 - For date-based queries, extract the time range from the query (e.g., 'last 6 months', 'since 2021').
 - Return the result as JSON with keys: 'sql' (the SQL query), 'action' (count, list, or date_filter), 'date_field' (e.g., StartDate, CEPStartDate, or none), and 'csv' (true if date_filter, false otherwise).
+
 Examples:
-- 'How many sites in Massachusetts?' → {{ 'sql': 'SELECT COUNT(*) as count FROM pr_site WHERE StateSiteCode = \\'MA\\'', 'action': 'count', 'date_field': 'none', 'csv': false }}
-- 'List regions' → {{ 'sql': 'SELECT RegionName, RegionId FROM pr_region WHERE StateCd = \\'MA\\'', 'action': 'list', 'date_field': 'none', 'csv': false }}
-- 'Sites created in the last 6 months' → {{ 'sql': 'SELECT COUNT(*) as count FROM pr_site WHERE StateSiteCode = \\'MA\\' AND StartDate >= \\'2024-09-10\\'', 'action': 'date_filter', 'date_field': 'StartDate', 'csv': true }}"""
+- 'How many sites in Massachusetts?' → {{ 'sql': 'SELECT COUNT(*) as count FROM pr_site s JOIN pr_region r ON s.RegionId = r.RegionId WHERE r.StateCd = \\'MA\\'', 'action': 'count', 'date_field': 'none', 'csv': false }}
+- 'List regions in NY' → {{ 'sql': 'SELECT RegionName, RegionId FROM pr_region WHERE StateCd = \\'NY\\'', 'action': 'list', 'date_field': 'none', 'csv': false }}
+- 'Sites created in the last 6 months' → {{ 'sql': 'SELECT COUNT(*) as count FROM pr_site s JOIN pr_region r ON s.RegionId = r.RegionId WHERE s.StartDate >= \\'2024-09-10\\'', 'action': 'date_filter', 'date_field': 'StartDate', 'csv': true }}
+- 'How many sites in Texas?' → {{ 'sql': 'SELECT COUNT(*) as count FROM pr_site s JOIN pr_region r ON s.RegionId = r.RegionId WHERE r.StateCd = \\'TX\\'', 'action': 'count', 'date_field': 'none', 'csv': false }}"""
     
     try:
         # Create payload for the API request
@@ -105,7 +121,7 @@ Examples:
             XAI_API_URL,
             headers=headers,
             json=payload,
-            timeout=30  # Add a timeout to prevent hanging
+            timeout=30
         )
         
         # Check if the request was successful
