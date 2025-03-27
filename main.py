@@ -33,7 +33,7 @@ DB_CONFIG = {
 }
 
 # Use environment variable for API key
-XAI_API_KEY = os.getenv("XAI_API_KEY", "xai-wLjpXGlEqqAjWOqbmXLnNkAGE8REsN3b4B2S2Zhg7QnLiHuiJ4TPYPEAm1sgFYGq9pS93ncHNGNerbmA")
+XAI_API_KEY = "xai-5z7ha8DF2bWU6LuGyWw5iIMTMiHy23k5gaHDYOHZ23JiMB9d39HyVDcMRzPJzcDZaMhaen8zAvW7Ohma"
 
 client = Anthropic(
     api_key=XAI_API_KEY,
