@@ -1,4 +1,6 @@
 
+const encodeURiComponent = window.encodeURIComponent;
+
 document.getElementById("chat-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const input = document.getElementById("user-input");
@@ -12,7 +14,7 @@ document.getElementById("chat-form").addEventListener("submit", async (e) => {
     const sqlResponse = await fetch("/generate_sql", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `query=${encodeURIComponent(message)}`
+        body: `query=${encodeURiComponent(message)}`
     });
     const sqlData = await sqlResponse.json();
     if (sqlData.error) {
@@ -24,7 +26,7 @@ document.getElementById("chat-form").addEventListener("submit", async (e) => {
     const execResponse = await fetch("/execute_sql", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `sql=${encodeURIComponent(sqlData.sql)}&action=${encodeURIComponent(sqlData.action)}&date_field=${encodeURIComponent(sqlData.date_field)}&csv=${encodeURIComponent(sqlData.csv)}`
+        body: `sql=${encodeURiComponent(sqlData.sql)}&action=${encodeURiComponent(sqlData.action)}&date_field=${encodeURiComponent(sqlData.date_field)}&csv=${encodeURiComponent(sqlData.csv)}`
     });
 
     if (execResponse.headers.get("content-type") === "text/csv") {
